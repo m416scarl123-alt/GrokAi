@@ -31,9 +31,8 @@ class XAI:
                 headers={**self.headers, "Content-Type": "application/json"},
                 json=payload,
             )
-            r.raise_for_status()
-            data = r.json()
-
+            if r.status_code >= 400:
+    raise RuntimeError(f"xAI API {r.status_code}: {r.text}")data = r.json()
         if data.get("output_text"):
             return data["output_text"]
 
