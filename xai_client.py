@@ -10,24 +10,14 @@ class XAI:
         self.base = "https://api.x.ai/v1"
 
     async def chat(self, messages, use_web=True, image_bytes=None, image_mime="image/jpeg"):
-        inp = []
-        for m in messages[:-1]:
-            inp.append({"role": m["role"], "content": m["content"]})
-
+        inp = [{"role": m["role"], "content": m["content"]} for m in messages[:-1]]
         last = messages[-1]
         if image_bytes:
             b64 = base64.b64encode(image_bytes).decode()
-            inp.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:{image_mime};base64,{b64}",
-                        "detail": "high",
-                    },
-                    {"type": "input_text", "text": last["content"]},
-                ],
-            })
+            inp.append({"role": "user", "content": [
+                {"type": "input_image", "image_url": f"data:{image_mime};base64,{b64}", "detail": "high"},
+                {"type": "input_text", "text": last["content"]},
+            ]})
         else:
             inp.append({"role": last["role"], "content": last["content"]})
 
@@ -43,33 +33,45 @@ class XAI:
             )
             r.raise_for_status()
             data = r.json()
-        return data.get("output_text", "")
+
+        if data.get("output_text"):
+            return data["output_text"]
+
+        chunks = []
+        for item in data.get("output", []):
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("text"):
+                    chunks.append(content["text"])
+        return "\n".join(chunks) if chunks else "Не удалось получить ответ от Grok."
 
     async def generate_image(self, prompt):
-        payload = {"model": self.image_model, "prompt": prompt}
         async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(
                 f"{self.base}/images/generations",
                 headers={**self.headers, "Content-Type": "application/json"},
-                json=payload,
+                json={"model": self.image_model, "prompt": prompt},
             )
             r.raise_for_status()
-            data = r.json()
-        return data["data"][0].get("url") or data["data"][0].get("b64_json")
+            item = r.json()["data"][0]
+        return item.get("url") or item.get("b64_json")
 
     async def stt(self, audio_bytes, filename="voice.ogg"):
-        files = {"file": (filename, audio_bytes, "audio/ogg")}
         async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(
                 f"{self.base}/stt",
                 headers=self.headers,
-                files=files,
+                files={"file": (filename, audio_bytes, "audio/ogg")},
             )
             r.raise_for_status()
             return r.json()["text"]
 
     async def tts(self, text, language="auto"):
-        payload = {"text": text, "voice_id": self.voice_id, "language": language}
+        payload = {
+            "text": text,
+            "voice_id": self.voice_id,
+            "language": language,
+            "output_format": {"codec": "mp3", "sample_rate": 24000, "bit_rate": 128000},
+        }
         async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(
                 f"{self.base}/tts",
@@ -77,4 +79,9 @@ class XAI:
                 json=payload,
             )
             r.raise_for_status()
-            return r.content
+            if "application/json" not in r.headers.get("content-type", ""):
+                return r.content
+            data = r.json()
+            if data.get("audio"):
+                return base64.b64decode(data["audio"])
+            raise RuntimeError("TTS returned JSON without audio.")

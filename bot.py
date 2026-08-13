@@ -1,11 +1,7 @@
-import asyncio
 import base64
 import io
 import secrets
 import string
-import smtplib
-from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -28,22 +24,6 @@ def gen_code():
     alphabet = string.ascii_uppercase + string.digits
     parts = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3)]
     return "GROK-" + "-".join(parts)
-
-def gen_admin_code():
-    return "".join(secrets.choice(string.digits) for _ in range(6))
-
-def send_admin_email(code):
-    msg = EmailMessage()
-    msg["Subject"] = "GrokChat — код администратора"
-    msg["From"] = settings.gmail_smtp_user
-    msg["To"] = settings.admin_email
-    msg.set_content(
-        f"Код входа в админ-панель GrokChat: {code}\n\n"
-        f"Код действует {settings.admin_code_ttl_minutes} минут и одноразовый."
-    )
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(settings.gmail_smtp_user, settings.gmail_app_password)
-        smtp.send_message(msg)
 
 async def ensure_user(update):
     await db.upsert_user(update.effective_user)
@@ -122,24 +102,14 @@ async def voice_cmd(update, context):
         "🔊 Голосовые ответы " + ("включены." if mode == "on" else "выключены.")
     )
 
+
 async def admin_cmd(update, context):
     if update.effective_user.id != settings.admin_telegram_id:
         await update.message.reply_text("⛔ Нет доступа.")
         return
-    code = gen_admin_code()
-    expires = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.admin_code_ttl_minutes
-    )
-    await db.save_admin_code(code, expires)
-    try:
-        await asyncio.to_thread(send_admin_email, code)
-    except Exception:
-        await update.message.reply_text("❌ Не удалось отправить код на Gmail.")
-        return
     context.user_data["admin_pending"] = True
-    await update.message.reply_text(
-        "📧 Одноразовый код отправлен на Gmail. Введи его сюда."
-    )
+    context.user_data["admin_ok"] = False
+    await update.message.reply_text("🔐 Введи пароль администратора.")
 
 async def admin_panel(update, context):
     s = await db.stats()
@@ -274,12 +244,12 @@ async def text_message(update, context):
         context.user_data.get("admin_pending")
         and update.effective_user.id == settings.admin_telegram_id
     ):
-        if await db.consume_admin_code(text.strip()):
+        if secrets.compare_digest(text.strip(), settings.admin_password):
             context.user_data["admin_pending"] = False
             context.user_data["admin_ok"] = True
             await admin_panel(update, context)
         else:
-            await update.message.reply_text("❌ Код неверный или просрочен.")
+            await update.message.reply_text("❌ Неверный пароль.")
         return
 
     if not u["activated"]:
@@ -326,6 +296,11 @@ async def post_init(app):
     await db.init_db(settings.database_url)
 
 def main():
+    if not settings.external_url:
+        raise RuntimeError("RENDER_EXTERNAL_URL is missing.")
+    if not settings.webhook_secret:
+        raise RuntimeError("WEBHOOK_SECRET is missing.")
+
     app = (
         Application.builder()
         .token(settings.telegram_bot_token)
@@ -343,7 +318,16 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, photo))
     app.add_handler(MessageHandler(filters.VOICE, voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    webhook_path = f"telegram/{settings.webhook_secret}"
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=settings.port,
+        url_path=webhook_path,
+        webhook_url=f"{settings.external_url}/{webhook_path}",
+        secret_token=settings.webhook_secret,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 if __name__ == "__main__":
     main()

@@ -1,42 +1,19 @@
-# GrokChat — Telegram AI bot
+# GrokAi — Render-ready version
 
-Публичный Telegram-бот на Grok 4.5 с закрытой активацией, памятью, веб-поиском,
-анализом изображений, голосовыми сообщениями, TTS, генерацией изображений,
-PostgreSQL и админ-панелью.
+Changes:
+- Telegram webhook instead of polling
+- Render binds to 0.0.0.0:$PORT
+- admin uses Telegram ID + password, no Gmail
+- PostgreSQL uses external DATABASE_URL
+- xAI Grok 4.5 / web search / image / STT / TTS
 
-## Реализовано
-- /start
-- закрытая активация ключом
-- один ключ: до 3 активаций
-- бессрочный доступ
-- память последних 25 сообщений
-- /newchat, /clear
-- Grok 4.5
-- web search для полного доступа
-- анализ изображений
-- voice -> STT -> Grok
-- ответ голосом по запросу: /voice on|off
-- генерация изображений: /image ...
-- /admin с подтверждением одноразовым кодом по Gmail
-- создание/отзыв ключей
-- /nonstop @username для полного доступа
-- PostgreSQL
-- Docker Compose для VPS
+Required Render environment variables:
+TELEGRAM_BOT_TOKEN
+XAI_API_KEY
+DATABASE_URL
+ADMIN_TELEGRAM_ID
+ADMIN_PASSWORD
+WEBHOOK_SECRET
 
-## Запуск на VPS
-1. Скопируй .env.example в .env.
-2. Заполни секреты.
-3. Выполни: docker compose up -d --build
-4. Логи: docker compose logs -f bot
-
-## Gmail
-Используй Gmail App Password, а не обычный пароль Google. Для App Password
-нужна включённая 2-Step Verification.
-
-## Безопасность
-Не отправляй Telegram Bot Token, XAI API Key или Gmail App Password в чат.
-Храни их только в .env на VPS.
-
-## 70% / 100%
-В этой стартовой версии full_access=false означает 70%, а /nonstop включает
-100%. Набор расширенных функций можно изменить в bot.py.
+Render supplies PORT and RENDER_EXTERNAL_URL automatically.
+Never commit real secrets to GitHub.
