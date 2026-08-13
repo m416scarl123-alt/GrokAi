@@ -27,15 +27,17 @@ class XAI:
 
         async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(
-                f"{self.base}/responses",
-                headers={**self.headers, "Content-Type": "application/json"},
-                json=payload,
-            )
-            if r.status_code >= 400:
-    raise RuntimeError(f"xAI API {r.status_code}: {r.text}")
-    data = r.json()
-        if data.get("output_text"):
-            return data["output_text"]
+    f"{self.base}/responses",
+    headers={**self.headers, "Content-Type": "application/json"},
+    json=payload,
+)
+
+if r.status_code >= 400:
+    raise RuntimeError(
+        f"xAI API {r.status_code}: {r.text}"
+    )
+
+data = r.json()
 
         chunks = []
         for item in data.get("output", []):
