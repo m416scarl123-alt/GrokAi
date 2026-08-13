@@ -116,6 +116,7 @@ async def admin_panel(update, context):
     keyboard = [
         [InlineKeyboardButton("🔑 Создать ключ", callback_data="admin_create_key")],
         [InlineKeyboardButton("📋 Коды", callback_data="admin_codes")],
+        [InlineKeyboardButton("🚫 Заблокировать", callback_data="admin_ban_help")],
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
     ]
     await update.message.reply_text(
@@ -151,6 +152,58 @@ async def nonstop(update, context):
     await db.set_full_access(row["telegram_id"], True)
     await update.message.reply_text(f"🚀 Полный доступ включён для @{username}.")
 
+
+async def _admin_target(update, context, action):
+    if update.effective_user.id != settings.admin_telegram_id:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    if not context.user_data.get("admin_ok"):
+        await update.message.reply_text("🔐 Сначала /admin и введи пароль администратора.")
+        return
+    target = " ".join(context.args).strip()
+    if not target:
+        await update.message.reply_text(f"Использование: /{action} @username или /{action} telegram_id")
+        return
+
+    target = target.lstrip("@")
+    async with db.POOL.acquire() as c:
+        if target.isdigit():
+            row = await c.fetchrow("SELECT telegram_id, username, first_name FROM users WHERE telegram_id=$1", int(target))
+        else:
+            row = await c.fetchrow(
+                "SELECT telegram_id, username, first_name FROM users WHERE lower(username)=lower($1)",
+                target,
+            )
+
+    if not row:
+        await update.message.reply_text("❌ Пользователь не найден в базе. Он должен хотя бы один раз написать боту.")
+        return
+    if row["telegram_id"] == settings.admin_telegram_id:
+        await update.message.reply_text("🛡️ Нельзя заблокировать администратора.")
+        return
+
+    enabled = action == "ban"
+    await db.set_blocked(row["telegram_id"], enabled)
+    name = f"@{row['username']}" if row["username"] else (row["first_name"] or str(row["telegram_id"]))
+    if enabled:
+        await update.message.reply_text(f"🚫 Пользователь {name} заблокирован.")
+        try:
+            await context.bot.send_message(row["telegram_id"], "🚫 Твой доступ к Grok AI заблокирован администратором.")
+        except Exception:
+            pass
+    else:
+        await update.message.reply_text(f"✅ Пользователь {name} разблокирован.")
+        try:
+            await context.bot.send_message(row["telegram_id"], "✅ Твой доступ к Grok AI восстановлен.")
+        except Exception:
+            pass
+
+async def ban_cmd(update, context):
+    await _admin_target(update, context, "ban")
+
+async def unban_cmd(update, context):
+    await _admin_target(update, context, "unban")
+
 async def callback(update, context):
     q = update.callback_query
     await q.answer()
@@ -183,6 +236,18 @@ async def callback(update, context):
             for r in rows
         )
         await q.message.reply_text(text, parse_mode="Markdown")
+    elif q.data == "admin_ban_help":
+        if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
+            return
+        await q.message.reply_text(
+            "🚫 Бан пользователя\n\n"
+            "Используй команду:\n"
+            "`/ban @username`\n"
+            "или\n"
+            "`/ban telegram_id`\n\n"
+            "Разблокировка: `/unban @username`",
+            parse_mode="Markdown",
+        )
     elif q.data == "admin_stats":
         if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
             return
@@ -314,6 +379,8 @@ def main():
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("nonstop", nonstop))
+    app.add_handler(CommandHandler("ban", ban_cmd))
+    app.add_handler(CommandHandler("unban", unban_cmd))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.PHOTO, photo))
     app.add_handler(MessageHandler(filters.VOICE, voice))
