@@ -38,8 +38,8 @@ if r.status_code >= 400:
     )
 
 data = r.json()
-
-        chunks = []
+  
+chunks = []
         for item in data.get("output", []):
             for content in item.get("content", []):
                 if isinstance(content, dict) and content.get("text"):
