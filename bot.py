@@ -309,7 +309,7 @@ async def text_message(update, context):
         context.user_data.get("admin_pending")
         and update.effective_user.id == settings.admin_telegram_id
     ):
-        if text.strip() == settings.admin_password
+        if text.strip() == settings.admin_password:
             context.user_data["admin_pending"] = False
             context.user_data["admin_ok"] = True
             await admin_panel(update, context)
