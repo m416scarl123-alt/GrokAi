@@ -1,6 +1,7 @@
 import base64
 import io
 import os
+from urllib.parse import quote
 
 import httpx
 import edge_tts
@@ -17,6 +18,10 @@ class XAI:
         voice_id
     ):
 
+        # =========================
+        # OPENROUTER
+        # =========================
+
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -25,19 +30,45 @@ class XAI:
         }
 
         self.model = "openrouter/free"
+
+        # =========================
+        # POLLINATIONS
+        # =========================
+
+        self.pollinations_api_key = os.getenv(
+            "XAI_API_KEY"
+        )
+
         self.image_model = image_model
+
+        # =========================
+        # VOICE
+        # =========================
+
         self.voice_id = voice_id or "alloy"
+
+        # =========================
+        # OPENROUTER URL
+        # =========================
 
         self.base = "https://openrouter.ai/api/v1"
 
-        # Groq для распознавания голоса
-        self.groq = AsyncGroq(
-            api_key=os.getenv("GROQ_API_KEY")
-        )
+        # =========================
+        # GROQ
+        # =========================
 
-    # =========================
-    # ЧАТ
-    # =========================
+        groq_key = os.getenv("GROQ_API_KEY")
+
+        if not groq_key:
+            self.groq = None
+        else:
+            self.groq = AsyncGroq(
+                api_key=groq_key
+            )
+
+    # ==================================================
+    # 💬 ЧАТ
+    # ==================================================
 
     async def chat(
         self,
@@ -59,9 +90,14 @@ class XAI:
                 "content": content,
             })
 
-        # Если есть изображение,
-        # добавляем его к последнему сообщению
-        if image_bytes is not None and openrouter_messages:
+        # ==================================================
+        # 🖼️ ДОБАВЛЯЕМ ИЗОБРАЖЕНИЕ
+        # ==================================================
+
+        if (
+            image_bytes is not None
+            and openrouter_messages
+        ):
 
             image_base64 = base64.b64encode(
                 image_bytes
@@ -69,17 +105,20 @@ class XAI:
 
             last_message = openrouter_messages[-1]
 
+            text_content = last_message["content"]
+
             last_message["content"] = [
                 {
                     "type": "text",
-                    "text": last_message["content"],
+                    "text": text_content,
                 },
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url":
+                        "url": (
                             f"data:{image_mime};base64,"
                             f"{image_base64}"
+                        )
                     },
                 },
             ]
@@ -111,7 +150,10 @@ class XAI:
 
         try:
 
-            return data["choices"][0]["message"]["content"]
+            return (
+                data["choices"][0]
+                ["message"]["content"]
+            )
 
         except (
             KeyError,
@@ -119,57 +161,77 @@ class XAI:
             TypeError,
         ):
 
-            return "Не удалось получить ответ от AI."
+            return (
+                "Не удалось получить "
+                "ответ от AI."
+            )
 
-    # =========================
-    # ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
-    # =========================
+    # ==================================================
+    # 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ
+    # ==================================================
 
-    async def generate_image(self, prompt):
+    async def generate_image(
+        self,
+        prompt
+    ):
 
-        payload = {
-            "model": self.image_model,
-            "prompt": prompt,
-            "n": 1,
+        if not self.pollinations_api_key:
+
+            raise RuntimeError(
+                "XAI_API_KEY не найден."
+            )
+
+        encoded_prompt = quote(
+            prompt,
+            safe=""
+        )
+
+        url = (
+            "https://gen.pollinations.ai/image/"
+            f"{encoded_prompt}"
+        )
+
+        params = {
+            "model": "flux"
+        }
+
+        headers = {
+            "Authorization":
+                f"Bearer {self.pollinations_api_key}"
         }
 
         async with httpx.AsyncClient(
             timeout=180
         ) as client:
 
-            response = await client.post(
-                f"{self.base}/images",
-                headers=self.headers,
-                json=payload,
+            response = await client.get(
+                url,
+                headers=headers,
+                params=params,
             )
 
         if response.status_code >= 400:
 
             raise RuntimeError(
-                f"Image API "
+                f"Pollinations API "
                 f"{response.status_code}: "
                 f"{response.text}"
             )
 
-        data = response.json()
-
-        try:
-
-            return data["data"][0]["b64_json"]
-
-        except (
-            KeyError,
-            IndexError,
-            TypeError,
-        ):
+        if not response.content:
 
             raise RuntimeError(
-                f"Изображение не получено: {data}"
+                "Pollinations не вернул "
+                "изображение."
             )
 
-    # =========================
-    # 🎤 ГОЛОС → ТЕКСТ
-    # =========================
+        return base64.b64encode(
+            response.content
+        ).decode("utf-8")
+
+    # ==================================================
+    # 🎤 SPEECH → TEXT
+    # ==================================================
 
     async def stt(
         self,
@@ -177,7 +239,7 @@ class XAI:
         filename="voice.ogg"
     ):
 
-        if not os.getenv("GROQ_API_KEY"):
+        if self.groq is None:
 
             raise RuntimeError(
                 "GROQ_API_KEY не найден."
@@ -185,20 +247,25 @@ class XAI:
 
         audio_file = (
             filename,
-            audio_bytes,
+            audio_bytes
         )
 
-        result = await self.groq.audio.transcriptions.create(
-            file=audio_file,
-            model="whisper-large-v3-turbo",
-            response_format="text",
+        result = await (
+            self.groq
+            .audio
+            .transcriptions
+            .create(
+                file=audio_file,
+                model="whisper-large-v3-turbo",
+                response_format="text",
+            )
         )
 
         return str(result)
 
-    # =========================
-    # 🔊 ТЕКСТ → ГОЛОС
-    # =========================
+    # ==================================================
+    # 🔊 TEXT → SPEECH
+    # ==================================================
 
     async def tts(
         self,
@@ -206,12 +273,15 @@ class XAI:
         language="auto"
     ):
 
-        # Русский голос
+        # Русский голос по умолчанию
         voice = "ru-RU-DmitryNeural"
 
-        # Если текст на английском
+        # Английский
         if language == "en":
-            voice = "en-US-GuyNeural"
+
+            voice = (
+                "en-US-GuyNeural"
+            )
 
         communicate = edge_tts.Communicate(
             text,
@@ -220,10 +290,14 @@ class XAI:
 
         audio = io.BytesIO()
 
-        async for chunk in communicate.stream():
+        async for chunk in (
+            communicate.stream()
+        ):
 
             if chunk["type"] == "audio":
 
-                audio.write(chunk["data"])
+                audio.write(
+                    chunk["data"]
+                )
 
         return audio.getvalue()
