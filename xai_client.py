@@ -64,8 +64,31 @@ class XAI:
             return "Не удалось получить ответ от AI."
 
     async def generate_image(self, prompt):
+    payload = {
+        "model": self.image_model,
+        "prompt": prompt,
+        "n": 1,
+    }
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(
+            f"{self.base}/images",
+            headers=self.headers,
+            json=payload,
+        )
+
+    if response.status_code >= 400:
         raise RuntimeError(
-            "Генерация изображений пока не подключена."
+            f"OpenRouter Image API {response.status_code}: {response.text}"
+        )
+
+    data = response.json()
+
+    try:
+        return data["data"][0]["b64_json"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(
+            f"OpenRouter не вернул изображение: {data}"
         )
 
     async def stt(self, audio_bytes, filename="voice.ogg"):
