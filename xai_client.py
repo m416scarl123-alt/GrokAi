@@ -1,9 +1,22 @@
 import base64
+import io
+import os
+
 import httpx
+import edge_tts
+from groq import AsyncGroq
 
 
 class XAI:
-    def __init__(self, api_key, model, image_model, voice_id):
+
+    def __init__(
+        self,
+        api_key,
+        model,
+        image_model,
+        voice_id
+    ):
+
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -11,37 +24,20 @@ class XAI:
             "X-Title": "GrokChat",
         }
 
-        # =========================
-        # МОДЕЛЬ ЧАТА
-        # =========================
-
         self.model = "openrouter/free"
-
-        # =========================
-        # МОДЕЛЬ ИЗОБРАЖЕНИЙ
-        # =========================
-
         self.image_model = image_model
-
-        # =========================
-        # ГОЛОС
-        # =========================
-
-        self.voice_id = voice_id
-
-        # Модели OpenRouter для аудио
-        self.stt_model = "openai/whisper-1"
-        self.tts_model = "openai/gpt-4o-mini-tts-2025-12-15"
-
-        # Если voice_id не задан,
-        # используем alloy
-        self.tts_voice = voice_id or "alloy"
+        self.voice_id = voice_id or "alloy"
 
         self.base = "https://openrouter.ai/api/v1"
 
-    # ==================================================
+        # Groq для распознавания голоса
+        self.groq = AsyncGroq(
+            api_key=os.getenv("GROQ_API_KEY")
+        )
+
+    # =========================
     # ЧАТ
-    # ==================================================
+    # =========================
 
     async def chat(
         self,
@@ -58,40 +54,35 @@ class XAI:
             role = message["role"]
             content = message["content"]
 
-            # ------------------------------------------
-            # Если пользователь отправил изображение
-            # ------------------------------------------
-
-            if (
-                role == "user"
-                and image_bytes is not None
-                and message is messages[-1]
-            ):
-
-                image_base64 = base64.b64encode(
-                    image_bytes
-                ).decode("utf-8")
-
-                content = [
-                    {
-                        "type": "text",
-                        "text": content,
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": (
-                                f"data:{image_mime};base64,"
-                                f"{image_base64}"
-                            )
-                        },
-                    },
-                ]
-
             openrouter_messages.append({
                 "role": role,
                 "content": content,
             })
+
+        # Если есть изображение,
+        # добавляем его к последнему сообщению
+        if image_bytes is not None and openrouter_messages:
+
+            image_base64 = base64.b64encode(
+                image_bytes
+            ).decode("utf-8")
+
+            last_message = openrouter_messages[-1]
+
+            last_message["content"] = [
+                {
+                    "type": "text",
+                    "text": last_message["content"],
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url":
+                            f"data:{image_mime};base64,"
+                            f"{image_base64}"
+                    },
+                },
+            ]
 
         payload = {
             "model": self.model,
@@ -109,6 +100,7 @@ class XAI:
             )
 
         if response.status_code >= 400:
+
             raise RuntimeError(
                 f"OpenRouter API "
                 f"{response.status_code}: "
@@ -118,6 +110,7 @@ class XAI:
         data = response.json()
 
         try:
+
             return data["choices"][0]["message"]["content"]
 
         except (
@@ -125,11 +118,12 @@ class XAI:
             IndexError,
             TypeError,
         ):
+
             return "Не удалось получить ответ от AI."
 
-    # ==================================================
+    # =========================
     # ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
-    # ==================================================
+    # =========================
 
     async def generate_image(self, prompt):
 
@@ -150,8 +144,9 @@ class XAI:
             )
 
         if response.status_code >= 400:
+
             raise RuntimeError(
-                f"OpenRouter Image API "
+                f"Image API "
                 f"{response.status_code}: "
                 f"{response.text}"
             )
@@ -159,121 +154,76 @@ class XAI:
         data = response.json()
 
         try:
-            image = data["data"][0]
 
-            if "b64_json" in image:
-                return image["b64_json"]
-
-            raise RuntimeError(
-                f"Изображение не содержит b64_json: {data}"
-            )
+            return data["data"][0]["b64_json"]
 
         except (
             KeyError,
             IndexError,
             TypeError,
         ):
+
             raise RuntimeError(
-                "OpenRouter не вернул изображение:\n"
-                f"{data}"
+                f"Изображение не получено: {data}"
             )
 
-    # ==================================================
-    # 🎤 SPEECH TO TEXT
-    # ==================================================
+    # =========================
+    # 🎤 ГОЛОС → ТЕКСТ
+    # =========================
 
     async def stt(
         self,
         audio_bytes,
-        filename="voice.ogg",
+        filename="voice.ogg"
     ):
 
-        audio_base64 = base64.b64encode(
-            audio_bytes
-        ).decode("utf-8")
+        if not os.getenv("GROQ_API_KEY"):
 
-        payload = {
-            "model": self.stt_model,
-
-            "input_audio": {
-                "data": audio_base64,
-                "format": "ogg",
-            },
-        }
-
-        async with httpx.AsyncClient(
-            timeout=180
-        ) as client:
-
-            response = await client.post(
-                f"{self.base}/audio/transcriptions",
-                headers=self.headers,
-                json=payload,
-            )
-
-        if response.status_code >= 400:
             raise RuntimeError(
-                f"OpenRouter STT API "
-                f"{response.status_code}: "
-                f"{response.text}"
+                "GROQ_API_KEY не найден."
             )
 
-        data = response.json()
+        audio_file = (
+            filename,
+            audio_bytes,
+        )
 
-        try:
-            text = data["text"]
+        result = await self.groq.audio.transcriptions.create(
+            file=audio_file,
+            model="whisper-large-v3-turbo",
+            response_format="text",
+        )
 
-            if not text:
-                return "Не удалось распознать речь."
+        return str(result)
 
-            return text
-
-        except (
-            KeyError,
-            TypeError,
-        ):
-            raise RuntimeError(
-                "OpenRouter не вернул текст:\n"
-                f"{data}"
-            )
-
-    # ==================================================
-    # 🔊 TEXT TO SPEECH
-    # ==================================================
+    # =========================
+    # 🔊 ТЕКСТ → ГОЛОС
+    # =========================
 
     async def tts(
         self,
         text,
-        language="auto",
+        language="auto"
     ):
 
-        payload = {
-            "model": self.tts_model,
-            "input": text,
-            "voice": self.tts_voice,
-            "response_format": "mp3",
-        }
+        # Русский голос
+        voice = "ru-RU-DmitryNeural"
 
-        async with httpx.AsyncClient(
-            timeout=180
-        ) as client:
+        # Если текст на английском
+        if language == "en":
+            voice = "en-US-GuyNeural"
 
-            response = await client.post(
-                f"{self.base}/audio/speech",
-                headers=self.headers,
-                json=payload,
-            )
+        communicate = edge_tts.Communicate(
+            text,
+            voice,
+        )
 
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"OpenRouter TTS API "
-                f"{response.status_code}: "
-                f"{response.text}"
-            )
+        audio = io.BytesIO()
 
-        if not response.content:
-            raise RuntimeError(
-                "OpenRouter не вернул аудио."
-            )
+        async for chunk in communicate.stream():
 
-        return response.content
+            if chunk["type"] == "audio":
+
+                audio.write(chunk["data"])
+
+        return audio.getvalue()
