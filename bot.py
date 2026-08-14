@@ -485,5 +485,7 @@ async def nonstop(update, context):
         settings.admin_telegram_id,
         OWNER_ID,
     ):
-
-        await
+        await update.message.reply_text(
+            "⛔ Нет доступа."
+        )
+        return
