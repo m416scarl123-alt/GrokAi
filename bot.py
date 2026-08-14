@@ -13,6 +13,13 @@ import db
 from config import settings
 from xai_client import XAI
 
+
+# =========================
+# НАСТРОЙКИ
+# =========================
+
+OWNER_ID = 8237924471
+
 xai = XAI(
     settings.xai_api_key,
     settings.xai_model,
@@ -20,105 +27,219 @@ xai = XAI(
     settings.xai_voice_id,
 )
 
+
+# =========================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =========================
+
 def gen_code():
     alphabet = string.ascii_uppercase + string.digits
-    parts = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3)]
+    parts = [
+        "".join(secrets.choice(alphabet) for _ in range(4))
+        for _ in range(3)
+    ]
     return "GROK-" + "-".join(parts)
+
 
 async def ensure_user(update):
     await db.upsert_user(update.effective_user)
     return await db.get_user(update.effective_user.id)
 
+
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆕 Новый чат", callback_data="newchat")],
-        [InlineKeyboardButton("🧹 Очистить память", callback_data="clear")],
+        [
+            InlineKeyboardButton(
+                "🆕 Новый чат",
+                callback_data="newchat"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🧹 Очистить память",
+                callback_data="clear"
+            )
+        ],
     ])
+
+
+# =========================
+# START
+# =========================
 
 async def start(update, context):
     u = await ensure_user(update)
+
     if u["blocked"]:
-        await update.message.reply_text("🚫 Твой доступ заблокирован.")
-        return
-    if not u["activated"]:
-        context.user_data["awaiting_activation"] = True
         await update.message.reply_text(
-            "🤖 Привет! Это Grok AI.\n\n🔐 Для доступа введи код активации."
+            "🚫 Твой доступ заблокирован."
         )
         return
+
+    if not u["activated"]:
+        context.user_data["awaiting_activation"] = True
+
+        await update.message.reply_text(
+            "🤖 Привет! Это Grok AI.\n\n"
+            "🔐 Для доступа введи код активации."
+        )
+        return
+
     await update.message.reply_text(
         "🤖 Grok AI готов. Просто напиши сообщение.",
         reply_markup=main_keyboard(),
     )
 
+
+# =========================
+# ОЧИСТКА ПАМЯТИ
+# =========================
+
 async def clear_cmd(update, context):
     u = await ensure_user(update)
+
     if not u["activated"] or u["blocked"]:
         return
+
     await db.clear_history(update.effective_user.id)
-    await update.message.reply_text("🧹 Память очищена.")
+
+    await update.message.reply_text(
+        "🧹 Память очищена."
+    )
+
+
+# =========================
+# ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+# =========================
 
 async def image_cmd(update, context):
     u = await ensure_user(update)
+
     if not u["activated"] or u["blocked"]:
         return
+
     if not u["full_access"]:
         await update.message.reply_text(
             "🔒 Генерация изображений доступна после полного доступа."
         )
         return
+
     prompt = " ".join(context.args).strip()
+
     if not prompt:
         await update.message.reply_text(
-            "Использование: /image космонавт на Марсе, кинематографично"
+            "Использование:\n"
+            "/image космонавт на Марсе, кинематографично"
         )
         return
-    await update.message.reply_text("🎨 Генерирую...")
+
+    await update.message.reply_text(
+        "🎨 Генерирую..."
+    )
+
     try:
         result = await xai.generate_image(prompt)
+
         if result.startswith("http"):
-            await update.message.reply_photo(result, caption="🎨 Готово")
+            await update.message.reply_photo(
+                result,
+                caption="🎨 Готово"
+            )
         else:
             await update.message.reply_photo(
                 io.BytesIO(base64.b64decode(result)),
-                caption="🎨 Готово",
+                caption="🎨 Готово"
             )
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка генерации: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка генерации: {e}"
+        )
+
+
+# =========================
+# ГОЛОС
+# =========================
 
 async def voice_cmd(update, context):
     u = await ensure_user(update)
+
     if not u["activated"] or u["blocked"]:
         return
+
     mode = context.args[0].lower() if context.args else ""
+
     if mode not in {"on", "off"}:
-        await update.message.reply_text("Использование: /voice on или /voice off")
+        await update.message.reply_text(
+            "Использование:\n"
+            "/voice on\n"
+            "/voice off"
+        )
         return
+
     if mode == "on" and not u["full_access"]:
-        await update.message.reply_text("🔒 Голосовые ответы доступны после /nonstop.")
+        await update.message.reply_text(
+            "🔒 Голосовые ответы доступны после /nonstop."
+        )
         return
+
     context.user_data["voice_reply"] = mode == "on"
+
     await update.message.reply_text(
-        "🔊 Голосовые ответы " + ("включены." if mode == "on" else "выключены.")
+        "🔊 Голосовые ответы "
+        + ("включены." if mode == "on" else "выключены.")
     )
 
 
+# =========================
+# АДМИН
+# =========================
+
 async def admin_cmd(update, context):
     if update.effective_user.id != settings.admin_telegram_id:
-        await update.message.reply_text("⛔ Нет доступа.")
+        await update.message.reply_text(
+            "⛔ Нет доступа."
+        )
         return
+
     context.user_data["admin_pending"] = True
     context.user_data["admin_ok"] = False
-    await update.message.reply_text("🔐 Введи пароль администратора.")
+
+    await update.message.reply_text(
+        "🔐 Введи пароль администратора."
+    )
+
 
 async def admin_panel(update, context):
     s = await db.stats()
+
     keyboard = [
-        [InlineKeyboardButton("🔑 Создать ключ", callback_data="admin_create_key")],
-        [InlineKeyboardButton("📋 Коды", callback_data="admin_codes")],
-        [InlineKeyboardButton("🚫 Заблокировать", callback_data="admin_ban_help")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [
+            InlineKeyboardButton(
+                "🔑 Создать ключ",
+                callback_data="admin_create_key"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 Коды",
+                callback_data="admin_codes"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🚫 Заблокировать",
+                callback_data="admin_ban_help"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📊 Статистика",
+                callback_data="admin_stats"
+            )
+        ],
     ]
+
     await update.message.reply_text(
         f"👑 Админ-панель\n\n"
         f"👥 Пользователей: {s['users']}\n"
@@ -129,129 +250,323 @@ async def admin_panel(update, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+
+# =========================
+# NONSTOP
+# =========================
+
 async def nonstop(update, context):
-    if update.effective_user.id not in (settings.admin_telegram_id, 8237924471):
-        await update.message.reply_text("⛔ Нет доступа.")
-        return
-    if not context.user_data.get("admin_ok"):
-        await update.message.reply_text("🔐 Сначала /admin и код из Gmail.")
-        return
-    target = " ".join(context.args).strip()
-    if not target:
-        await update.message.reply_text("Использование: /nonstop @username")
-        return
-    username = target.lstrip("@")
-    async with db.POOL.acquire() as c:
-        row = await c.fetchrow(
-            "SELECT telegram_id FROM users WHERE lower(username)=lower($1)",
-            username,
+    user_id = update.effective_user.id
+
+    # Только владелец или настоящий администратор
+    if user_id not in (
+        settings.admin_telegram_id,
+        OWNER_ID,
+    ):
+        await update.message.reply_text(
+            "⛔ Нет доступа."
         )
-    if not row:
-        await update.message.reply_text("Пользователь не найден в базе.")
         return
-    await db.set_full_access(row["telegram_id"], True)
-    await update.message.reply_text(f"🚀 Полный доступ включён для @{username}.")
 
+    # Владелец может использовать /nonstop напрямую.
+    # Администратору нужен /admin и пароль.
+    if (
+        user_id != OWNER_ID
+        and not context.user_data.get("admin_ok")
+    ):
+        await update.message.reply_text(
+            "🔐 Сначала /admin и код из Gmail."
+        )
+        return
 
-async def _admin_target(update, context, action):
-    if update.effective_user.id != settings.admin_telegram_id:
-        await update.message.reply_text("⛔ Нет доступа.")
-        return
-    if not context.user_data.get("admin_ok"):
-        await update.message.reply_text("🔐 Сначала /admin и введи пароль администратора.")
-        return
     target = " ".join(context.args).strip()
+
     if not target:
-        await update.message.reply_text(f"Использование: /{action} @username или /{action} telegram_id")
+        await update.message.reply_text(
+            "Использование:\n"
+            "/nonstop @username\n"
+            "или\n"
+            "/nonstop telegram_id"
+        )
         return
 
     target = target.lstrip("@")
+
     async with db.POOL.acquire() as c:
+
         if target.isdigit():
-            row = await c.fetchrow("SELECT telegram_id, username, first_name FROM users WHERE telegram_id=$1", int(target))
+            row = await c.fetchrow(
+                """
+                SELECT telegram_id, username
+                FROM users
+                WHERE telegram_id=$1
+                """,
+                int(target),
+            )
         else:
             row = await c.fetchrow(
-                "SELECT telegram_id, username, first_name FROM users WHERE lower(username)=lower($1)",
+                """
+                SELECT telegram_id, username
+                FROM users
+                WHERE lower(username)=lower($1)
+                """,
                 target,
             )
 
     if not row:
-        await update.message.reply_text("❌ Пользователь не найден в базе. Он должен хотя бы один раз написать боту.")
+        await update.message.reply_text(
+            "❌ Пользователь не найден в базе.\n\n"
+            "Он должен хотя бы один раз написать боту."
+        )
         return
+
+    await db.set_full_access(
+        row["telegram_id"],
+        True
+    )
+
+    name = (
+        f"@{row['username']}"
+        if row["username"]
+        else str(row["telegram_id"])
+    )
+
+    await update.message.reply_text(
+        f"🚀 Полный доступ включён для {name}."
+    )
+
+
+# =========================
+# BAN / UNBAN
+# =========================
+
+async def _admin_target(update, context, action):
+
+    if update.effective_user.id != settings.admin_telegram_id:
+        await update.message.reply_text(
+            "⛔ Нет доступа."
+        )
+        return
+
+    if not context.user_data.get("admin_ok"):
+        await update.message.reply_text(
+            "🔐 Сначала /admin и введи пароль администратора."
+        )
+        return
+
+    target = " ".join(context.args).strip()
+
+    if not target:
+        await update.message.reply_text(
+            f"Использование:\n"
+            f"/{action} @username\n"
+            f"или\n"
+            f"/{action} telegram_id"
+        )
+        return
+
+    target = target.lstrip("@")
+
+    async with db.POOL.acquire() as c:
+
+        if target.isdigit():
+            row = await c.fetchrow(
+                """
+                SELECT telegram_id, username, first_name
+                FROM users
+                WHERE telegram_id=$1
+                """,
+                int(target),
+            )
+        else:
+            row = await c.fetchrow(
+                """
+                SELECT telegram_id, username, first_name
+                FROM users
+                WHERE lower(username)=lower($1)
+                """,
+                target,
+            )
+
+    if not row:
+        await update.message.reply_text(
+            "❌ Пользователь не найден в базе."
+        )
+        return
+
     if row["telegram_id"] == settings.admin_telegram_id:
-        await update.message.reply_text("🛡️ Нельзя заблокировать администратора.")
+        await update.message.reply_text(
+            "🛡️ Нельзя заблокировать администратора."
+        )
         return
 
     enabled = action == "ban"
-    await db.set_blocked(row["telegram_id"], enabled)
-    name = f"@{row['username']}" if row["username"] else (row["first_name"] or str(row["telegram_id"]))
+
+    await db.set_blocked(
+        row["telegram_id"],
+        enabled
+    )
+
+    name = (
+        f"@{row['username']}"
+        if row["username"]
+        else (
+            row["first_name"]
+            or str(row["telegram_id"])
+        )
+    )
+
     if enabled:
-        await update.message.reply_text(f"🚫 Пользователь {name} заблокирован.")
+
+        await update.message.reply_text(
+            f"🚫 Пользователь {name} заблокирован."
+        )
+
         try:
-            await context.bot.send_message(row["telegram_id"], "🚫 Твой доступ к Grok AI заблокирован администратором.")
+            await context.bot.send_message(
+                row["telegram_id"],
+                "🚫 Твой доступ к Grok AI заблокирован администратором."
+            )
         except Exception:
             pass
+
     else:
-        await update.message.reply_text(f"✅ Пользователь {name} разблокирован.")
+
+        await update.message.reply_text(
+            f"✅ Пользователь {name} разблокирован."
+        )
+
         try:
-            await context.bot.send_message(row["telegram_id"], "✅ Твой доступ к Grok AI восстановлен.")
+            await context.bot.send_message(
+                row["telegram_id"],
+                "✅ Твой доступ к Grok AI восстановлен."
+            )
         except Exception:
             pass
+
 
 async def ban_cmd(update, context):
-    await _admin_target(update, context, "ban")
+    await _admin_target(
+        update,
+        context,
+        "ban"
+    )
+
 
 async def unban_cmd(update, context):
-    await _admin_target(update, context, "unban")
+    await _admin_target(
+        update,
+        context,
+        "unban"
+    )
+
+
+# =========================
+# CALLBACK
+# =========================
 
 async def callback(update, context):
+
     q = update.callback_query
     await q.answer()
+
     if q.data == "newchat":
+
         await db.clear_history(q.from_user.id)
-        await q.message.reply_text("🆕 Новый чат создан.")
-    elif q.data == "clear":
-        await db.clear_history(q.from_user.id)
-        await q.message.reply_text("🧹 Память очищена.")
-    elif q.data == "admin_create_key":
-        if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
-            return
-        code = gen_code()
-        await db.create_activation_code(code, settings.activation_code_uses)
+
         await q.message.reply_text(
-            f"🔑 Новый код:\n`{code}`\n\n"
-            f"Использований: 0/{settings.activation_code_uses}\nСрок: ♾️",
+            "🆕 Новый чат создан."
+        )
+
+    elif q.data == "clear":
+
+        await db.clear_history(q.from_user.id)
+
+        await q.message.reply_text(
+            "🧹 Память очищена."
+        )
+
+    elif q.data == "admin_create_key":
+
+        if (
+            q.from_user.id != settings.admin_telegram_id
+            or not context.user_data.get("admin_ok")
+        ):
+            return
+
+        code = gen_code()
+
+        await db.create_activation_code(
+            code,
+            settings.activation_code_uses
+        )
+
+        await q.message.reply_text(
+            f"🔑 Новый код:\n"
+            f"`{code}`\n\n"
+            f"Использований: "
+            f"0/{settings.activation_code_uses}\n"
+            f"Срок: ♾️",
             parse_mode="Markdown",
         )
+
     elif q.data == "admin_codes":
-        if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
+
+        if (
+            q.from_user.id != settings.admin_telegram_id
+            or not context.user_data.get("admin_ok")
+        ):
             return
+
         rows = await db.list_codes()
+
         if not rows:
-            await q.message.reply_text("Кодов пока нет.")
+            await q.message.reply_text(
+                "Кодов пока нет."
+            )
             return
+
         text = "\n".join(
-            f"`{r['code']}` — {r['uses']}/{r['max_uses']} "
+            f"`{r['code']}` — "
+            f"{r['uses']}/{r['max_uses']} "
             f"{'🚫' if r['revoked'] else '🟢'}"
             for r in rows
         )
-        await q.message.reply_text(text, parse_mode="Markdown")
+
+        await q.message.reply_text(
+            text,
+            parse_mode="Markdown"
+        )
+
     elif q.data == "admin_ban_help":
-        if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
+
+        if (
+            q.from_user.id != settings.admin_telegram_id
+            or not context.user_data.get("admin_ok")
+        ):
             return
+
         await q.message.reply_text(
             "🚫 Бан пользователя\n\n"
-            "Используй команду:\n"
-            "`/ban @username`\n"
-            "или\n"
+            "Используй:\n"
+            "`/ban @username`\n\n"
+            "или:\n"
             "`/ban telegram_id`\n\n"
-            "Разблокировка: `/unban @username`",
+            "Разблокировка:\n"
+            "`/unban @username`",
             parse_mode="Markdown",
         )
+
     elif q.data == "admin_stats":
-        if q.from_user.id != settings.admin_telegram_id or not context.user_data.get("admin_ok"):
+
+        if (
+            q.from_user.id != settings.admin_telegram_id
+            or not context.user_data.get("admin_ok")
+        ):
             return
+
         s = await db.stats()
+
         await q.message.reply_text(
             f"📊 Статистика\n\n"
             f"Пользователи: {s['users']}\n"
@@ -261,110 +576,281 @@ async def callback(update, context):
             f"Запросы: {s['requests']}"
         )
 
-async def process_text(update, context, text, image_bytes=None):
-    u = await db.get_user(update.effective_user.id)
+
+# =========================
+# ОБРАБОТКА ТЕКСТА
+# =========================
+
+async def process_text(
+    update,
+    context,
+    text,
+    image_bytes=None
+):
+
+    u = await db.get_user(
+        update.effective_user.id
+    )
+
     if not u or not u["activated"] or u["blocked"]:
-        await update.message.reply_text("🔐 Сначала активируй доступ.")
+        await update.message.reply_text(
+            "🔐 Сначала активируй доступ."
+        )
         return
 
-    history = await db.get_history(update.effective_user.id, settings.memory_messages)
+    history = await db.get_history(
+        update.effective_user.id,
+        settings.memory_messages
+    )
+
     await db.add_message(
         update.effective_user.id,
         "user",
-        text if not image_bytes else "[изображение] " + text,
+        text if not image_bytes
+        else "[изображение] " + text,
         settings.memory_messages,
     )
-    history.append({"role": "user", "content": text})
-    await update.message.chat.send_action("typing")
+
+    history.append({
+        "role": "user",
+        "content": text
+    })
+
+    await update.message.chat.send_action(
+        "typing"
+    )
 
     try:
+
         answer = await xai.chat(
             history,
             use_web=bool(u["full_access"]),
             image_bytes=image_bytes,
             image_mime="image/jpeg",
         )
+
         await db.add_message(
             update.effective_user.id,
             "assistant",
             answer,
             settings.memory_messages,
         )
-        await db.increment_requests(update.effective_user.id)
-        await update.message.reply_text(answer)
 
-        if context.user_data.get("voice_reply") and u["full_access"]:
-            audio = await xai.tts(answer, "auto")
-            await update.message.reply_voice(
-                io.BytesIO(audio), filename="grok.mp3"
+        await db.increment_requests(
+            update.effective_user.id
+        )
+
+        await update.message.reply_text(
+            answer
+        )
+
+        if (
+            context.user_data.get("voice_reply")
+            and u["full_access"]
+        ):
+
+            audio = await xai.tts(
+                answer,
+                "auto"
             )
+
+            await update.message.reply_voice(
+                io.BytesIO(audio),
+                filename="grok.mp3"
+            )
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка Grok API: {e}")
+
+        await update.message.reply_text(
+            f"❌ Ошибка Grok API: {e}"
+        )
+
+
+# =========================
+# ТЕКСТОВЫЕ СООБЩЕНИЯ
+# =========================
 
 async def text_message(update, context):
+
     u = await ensure_user(update)
+
     text = update.message.text or ""
 
     if (
         context.user_data.get("admin_pending")
-        and update.effective_user.id == settings.admin_telegram_id
+        and update.effective_user.id
+        == settings.admin_telegram_id
     ):
+
         if text.strip() == settings.admin_password:
+
             context.user_data["admin_pending"] = False
             context.user_data["admin_ok"] = True
-            await admin_panel(update, context)
+
+            await admin_panel(
+                update,
+                context
+            )
+
         else:
-            await update.message.reply_text("❌ Неверный пароль.")
+
+            await update.message.reply_text(
+                "❌ Неверный пароль."
+            )
+
         return
 
     if not u["activated"]:
-        ok, reason = await db.activate_code(text.strip(), update.effective_user.id)
+
+        ok, reason = await db.activate_code(
+            text.strip(),
+            update.effective_user.id
+        )
+
         if ok:
-            context.user_data["awaiting_activation"] = False
-            await update.message.reply_text("✅ Доступ активирован навсегда!")
+
+            context.user_data[
+                "awaiting_activation"
+            ] = False
+
+            await update.message.reply_text(
+                "✅ Доступ активирован навсегда!"
+            )
+
         elif reason == "already":
-            await update.message.reply_text("ℹ️ Этот код уже использован тобой.")
+
+            await update.message.reply_text(
+                "ℹ️ Этот код уже использован тобой."
+            )
+
         else:
-            await update.message.reply_text("❌ Неверный или исчерпанный код.")
+
+            await update.message.reply_text(
+                "❌ Неверный или исчерпанный код."
+            )
+
         return
 
-    await process_text(update, context, text)
+    await process_text(
+        update,
+        context,
+        text
+    )
+
+
+# =========================
+# ФОТО
+# =========================
 
 async def photo(update, context):
+
     u = await ensure_user(update)
+
     if not u["activated"] or u["blocked"]:
-        await update.message.reply_text("🔐 Сначала активируй доступ.")
+        await update.message.reply_text(
+            "🔐 Сначала активируй доступ."
+        )
         return
+
     photo = update.message.photo[-1]
-    tg_file = await context.bot.get_file(photo.file_id)
+
+    tg_file = await context.bot.get_file(
+        photo.file_id
+    )
+
     buf = io.BytesIO()
-    await tg_file.download_to_memory(buf)
-    caption = update.message.caption or "Что на изображении? Проанализируй подробно."
-    await process_text(update, context, caption, image_bytes=buf.getvalue())
+
+    await tg_file.download_to_memory(
+        buf
+    )
+
+    caption = (
+        update.message.caption
+        or "Что на изображении? Проанализируй подробно."
+    )
+
+    await process_text(
+        update,
+        context,
+        caption,
+        image_bytes=buf.getvalue()
+    )
+
+
+# =========================
+# ГОЛОС
+# =========================
 
 async def voice(update, context):
+
     u = await ensure_user(update)
+
     if not u["activated"] or u["blocked"]:
-        await update.message.reply_text("🔐 Сначала активируй доступ.")
+        await update.message.reply_text(
+            "🔐 Сначала активируй доступ."
+        )
         return
-    tg_file = await context.bot.get_file(update.message.voice.file_id)
+
+    tg_file = await context.bot.get_file(
+        update.message.voice.file_id
+    )
+
     buf = io.BytesIO()
-    await tg_file.download_to_memory(buf)
+
+    await tg_file.download_to_memory(
+        buf
+    )
+
     try:
-        text = await xai.stt(buf.getvalue(), "voice.ogg")
-        await update.message.reply_text(f"🎤 Я услышал:\n{text}")
-        await process_text(update, context, text)
+
+        text = await xai.stt(
+            buf.getvalue(),
+            "voice.ogg"
+        )
+
+        await update.message.reply_text(
+            f"🎤 Я услышал:\n{text}"
+        )
+
+        await process_text(
+            update,
+            context,
+            text
+        )
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка распознавания голоса: {e}")
+
+        await update.message.reply_text(
+            f"❌ Ошибка распознавания голоса: {e}"
+        )
+
+
+# =========================
+# POST INIT
+# =========================
 
 async def post_init(app):
-    await db.init_db(settings.database_url)
+
+    await db.init_db(
+        settings.database_url
+    )
+
+
+# =========================
+# MAIN
+# =========================
 
 def main():
+
     if not settings.external_url:
-        raise RuntimeError("RENDER_EXTERNAL_URL is missing.")
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL is missing."
+        )
+
     if not settings.webhook_secret:
-        raise RuntimeError("WEBHOOK_SECRET is missing.")
+        raise RuntimeError(
+            "WEBHOOK_SECRET is missing."
+        )
 
     app = (
         Application.builder()
@@ -372,29 +858,79 @@ def main():
         .post_init(post_init)
         .build()
     )
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("clear", clear_cmd))
-    app.add_handler(CommandHandler("newchat", clear_cmd))
-    app.add_handler(CommandHandler("image", image_cmd))
-    app.add_handler(CommandHandler("voice", voice_cmd))
-    app.add_handler(CommandHandler("admin", admin_cmd))
-    app.add_handler(CommandHandler("nonstop", nonstop))
-    app.add_handler(CommandHandler("ban", ban_cmd))
-    app.add_handler(CommandHandler("unban", unban_cmd))
-    app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.PHOTO, photo))
-    app.add_handler(MessageHandler(filters.VOICE, voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
 
-    webhook_path = f"telegram/{settings.webhook_secret}"
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("clear", clear_cmd)
+    )
+
+    app.add_handler(
+        CommandHandler("newchat", clear_cmd)
+    )
+
+    app.add_handler(
+        CommandHandler("image", image_cmd)
+    )
+
+    app.add_handler(
+        CommandHandler("voice", voice_cmd)
+    )
+
+    app.add_handler(
+        CommandHandler("admin", admin_cmd)
+    )
+
+    # Теперь используется /nonstop
+    app.add_handler(
+        CommandHandler("nonstop", nonstop)
+    )
+
+    app.add_handler(
+        CommandHandler("ban", ban_cmd)
+    )
+
+    app.add_handler(
+        CommandHandler("unban", unban_cmd)
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(callback)
+    )
+
+    app.add_handler(
+        MessageHandler(filters.PHOTO, photo)
+    )
+
+    app.add_handler(
+        MessageHandler(filters.VOICE, voice)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_message
+        )
+    )
+
+    webhook_path = (
+        f"telegram/{settings.webhook_secret}"
+    )
+
     app.run_webhook(
         listen="0.0.0.0",
         port=settings.port,
         url_path=webhook_path,
-        webhook_url=f"{settings.external_url}/{webhook_path}",
+        webhook_url=(
+            f"{settings.external_url}/"
+            f"{webhook_path}"
+        ),
         secret_token=settings.webhook_secret,
         allowed_updates=Update.ALL_TYPES,
     )
+
 
 if __name__ == "__main__":
     main()
